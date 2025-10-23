@@ -1,0 +1,58 @@
+name: DevSecOps Security Pipeline
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Upgrade pip and install toolchain
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt || true
+          python -m pip install pip-audit bandit pytest hypothesis
+
+      # ---------- SCA ----------
+      - name: SCA – pip-audit (fail on any vulnerability)
+        run: |
+          python -m pip_audit -r requirements.txt --strict --format json --output pip-audit.json
+          python -m pip_audit -r requirements.txt || true
+
+      # ---------- SAST ----------
+      - name: SAST – Bandit (generate JSON)
+        run: |
+          bandit -r demo.py -f json -o bandit-report.json
+          bandit -r demo.py || true
+
+      - name: Enforce SAST policy (fail on HIGH)
+        shell: bash
+        run: |
+          if grep -q '"issue_severity": "HIGH"' bandit-report.json; then
+            echo "Bandit found HIGH severity findings. Failing the job."
+            exit 1
+          fi
+
+      # ---------- DAST ----------
+      - name: DAST – runtime misuse/fuzz tests
+        run: |
+          pytest -q --disable-warnings --junitxml=report.xml
+
+      # ---------- Artifacts ----------
+      - name: Upload security artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            pip-audit.json
+            bandit-report.json
+            report.xml
